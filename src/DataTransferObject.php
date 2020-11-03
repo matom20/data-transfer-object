@@ -4,16 +4,12 @@ declare(strict_types=1);
 
 namespace Spatie\DataTransferObject;
 
+use Illuminate\Support\Str;
 use ReflectionClass;
 use ReflectionProperty;
 
 abstract class DataTransferObject
 {
-    protected bool $ignoreMissing = false;
-
-    protected array $exceptKeys = [];
-
-    protected array $onlyKeys = [];
 
     /**
      * @param array $parameters
@@ -85,9 +81,14 @@ abstract class DataTransferObject
             DataTransferObjectError::invalidTypes($invalidTypes);
         }
 
-        if (! $this->ignoreMissing && count($parameters)) {
+        if (! $this->ignoreMissing() && count($parameters)) {
             throw DataTransferObjectError::unknownProperties(array_keys($parameters), static::class);
         }
+    }
+
+    protected function ignoreMissing(): bool
+    {
+        return false;
     }
 
     public function all(): array
@@ -96,7 +97,7 @@ abstract class DataTransferObject
 
         $class = new ReflectionClass(static::class);
 
-        $properties = $class->getProperties(ReflectionProperty::IS_PUBLIC);
+        $properties = $class->getProperties(ReflectionProperty::IS_PROTECTED);
 
         foreach ($properties as $reflectionProperty) {
             // Skip static properties
@@ -104,51 +105,29 @@ abstract class DataTransferObject
                 continue;
             }
 
-            $data[$reflectionProperty->getName()] = $reflectionProperty->getValue($this);
+            $method = $reflectionProperty->getName();
+            $method = Str::studly($method);
+            $method = 'get'.$method;
+
+            $data[$reflectionProperty->getName()] = $class->hasMethod($method) ? $class->getMethod($method)->invoke($this) : null;
         }
 
         return $data;
     }
 
-    /**
-     * @param string ...$keys
-     *
-     * @return static
-     */
-    public function only(string ...$keys): DataTransferObject
+    public function only(string ...$keys): DataTransferObjectArray
     {
-        $dataTransferObject = clone $this;
-
-        $dataTransferObject->onlyKeys = [...$this->onlyKeys, ...$keys];
-
-        return $dataTransferObject;
+        return new DataTransferObjectArray(Arr::only($this->toArray(), $keys));
     }
 
-    /**
-     * @param string ...$keys
-     *
-     * @return static
-     */
-    public function except(string ...$keys): DataTransferObject
+    public function except(string ...$keys): DataTransferObjectArray
     {
-        $dataTransferObject = clone $this;
-
-        $dataTransferObject->exceptKeys = [...$this->exceptKeys, ...$keys];
-
-        return $dataTransferObject;
+        return new DataTransferObjectArray(Arr::except($this->toArray(), $keys));
     }
 
     public function toArray(): array
     {
-        if (count($this->onlyKeys)) {
-            $array = Arr::only($this->all(), $this->onlyKeys);
-        } else {
-            $array = Arr::except($this->all(), $this->exceptKeys);
-        }
-
-        $array = $this->parseArray($array);
-
-        return $array;
+        return $this->parseArray($this->all());
     }
 
     protected function parseArray(array $array): array
@@ -174,8 +153,6 @@ abstract class DataTransferObject
     }
 
     /**
-     * @param \ReflectionClass $class
-     *
      * @return \Spatie\DataTransferObject\FieldValidator[]
      */
     protected function getFieldValidators(): array
@@ -185,7 +162,7 @@ abstract class DataTransferObject
 
             $properties = [];
 
-            foreach ($class->getProperties(ReflectionProperty::IS_PUBLIC) as $reflectionProperty) {
+            foreach ($class->getProperties(ReflectionProperty::IS_PROTECTED) as $reflectionProperty) {
                 // Skip static properties
                 if ($reflectionProperty->isStatic()) {
                     continue;
